@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.streamlit/secrets.toml
+**/.streamlit/secrets.toml
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.zip
+*.log
+backend/.inference_workdir/
+backend/models/*.pt
+backend/models/*.pth
