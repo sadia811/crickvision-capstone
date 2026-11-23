@@ -9,3 +9,5 @@ PyYAML
 
 # Exported RTMPose-S website inference (no MMPose/MMCV cloud dependency)
 onnxruntime>=1.18,<2
+lap==0.5.12
+imageio-ffmpeg==0.6.0

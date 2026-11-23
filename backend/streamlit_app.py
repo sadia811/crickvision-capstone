@@ -194,21 +194,38 @@ def pose_image(img_bgr):
     return draw_poses(img_bgr, boxes, poses, scores=scores), len(poses)
 
 
-def resize_frame(frame, max_width=848):
+def resize_frame(frame, max_width=1280):
     h,w = frame.shape[:2]
     if w<=max_width: return frame
     return cv2.resize(frame, (max_width,round(h*max_width/w)))
 
 
 def transcode_h264(src):
-    if not shutil.which("ffmpeg"):
-        return src, False
-    dst = src.with_name("crickvision_h264.mp4")
-    command = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-an", "-c:v", "libx264",
-               "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst)]
-    run = subprocess.run(command, capture_output=True, text=True)
-    return (dst, True) if run.returncode == 0 and dst.is_file() else (src, False)
+    """Convert OpenCV mp4v to browser-ready H.264 without cropping the frame.
 
+    Use system FFmpeg when available, otherwise the imageio-ffmpeg binary.
+    Raise an explicit error instead of silently serving unplayable MP4V.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        from imageio_ffmpeg import get_ffmpeg_exe
+        ffmpeg = get_ffmpeg_exe()
+    dst = src.with_name("crickvision_h264.mp4")
+    command = [
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(src), "-map", "0:v:0", "-an",
+        # H.264/YUV420P require even dimensions; pad at most one pixel.
+        # This preserves the entire image without cropping or stretching.
+        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        "-threads", "2", str(dst),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0 or not dst.is_file() or dst.stat().st_size == 0:
+        error = result.stderr.strip()[-1500:] or "no encoder output"
+        raise RuntimeError("H.264 video encoding failed: " + error)
+    return dst, True
 
 def process_video(input_path, task, seconds, conf, progress):
     import supervision as sv
@@ -346,10 +363,10 @@ if run and upload:
                     output,frames,h264=process_video(source,task,max_sec,conf,progress)
                 progress.empty()
                 st.success(f"Processed {frames} frames in {time.perf_counter()-started:.1f} seconds")
-                if not h264:
-                    st.warning("FFmpeg/H.264 conversion was unavailable. Downloaded video may not play in every browser.")
-                st.video(str(output))
-                st.download_button("Download annotated MP4",output.read_bytes(),file_name="crickvision_result.mp4",mime="video/mp4")
+                final_video_bytes = output.read_bytes()
+                st.video(final_video_bytes, format="video/mp4")
+                st.download_button("Download annotated MP4", final_video_bytes,
+                                   file_name="crickvision_result.mp4", mime="video/mp4")
     except Exception as exc:
         st.error(f"Inference could not run: {exc}")
         st.caption("Verify the checkpoint paths, RTMPose package versions, and available CPU/GPU memory. See deployment logs.")
