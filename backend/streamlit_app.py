@@ -83,9 +83,11 @@ def get_pose_model():
     # Patch these without changing the trained architecture or keypoint order.
     from mmengine.config import Config
     from mmpose.utils import register_all_modules
+    from mmdet.utils import register_all_modules as register_mmdet_modules
     from mmpose.apis import init_model
     import torch
 
+    register_mmdet_modules(init_default_scope=False)
     register_all_modules(init_default_scope=True)
     cfg = Config.fromfile(str(RT_CONFIG))
     for key in ("train_dataloader", "val_dataloader", "test_dataloader"):

@@ -1,7 +1,8 @@
-# RTMPose-S inference dependencies
-mmengine==0.10.7
-mmcv-lite==2.1.0
-mmpose==1.3.2
-json-tricks
-munkres
-xtcocotools>=1.12
+# Core demo dependencies. Pose installation additionally requires compatible OpenMMLab packages.
+streamlit>=1.46,<2
+ultralytics>=8.4,<9
+supervision==0.26.1
+opencv-python-headless>=4.8
+numpy>=1.24,<2
+Pillow
+PyYAML
