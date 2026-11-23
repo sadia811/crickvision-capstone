@@ -1,0 +1,12 @@
+# Local files never needed inside the Linux inference container
+.git
+.venv
+__pycache__
+*.pyc
+.DS_Store
+*.mp4
+*.mov
+*.avi
+*.csv
+*.log
+.streamlit/secrets.toml
