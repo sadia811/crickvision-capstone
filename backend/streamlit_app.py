@@ -34,12 +34,26 @@ EDGES = [(0,1),(0,2),(1,2),(1,9),(9,10),(2,11),(11,12),
          (1,3),(2,4),(3,4),(3,5),(5,6),(4,7),(7,8)]
 STATIC_NAMES = {"boundaryline", "creaseline"}
 
-st.set_page_config(page_title="CrickVision AI Vision Studio", page_icon="🏏", layout="wide")
+st.set_page_config(page_title="CrickVision | AI Vision Studio", page_icon="🏏", layout="wide")
 st.markdown("""
 <style>
-.block-container {padding-top: 1.2rem; max-width: 1180px;}
-.stButton > button {background:#0f8275; color:white; border-radius: 12px; border:0;}
-.stButton > button:hover {background:#0b6a60; color:white; border:0;}
+  [data-testid="stAppViewContainer"] { background: #f7f9fc; }
+  [data-testid="stMainBlockContainer"] { max-width: 1100px; padding-top: 20px; padding-bottom: 36px; }
+  .cv-intro { display:flex; align-items:center; gap:19px; padding:21px 24px; margin:0 0 14px; background:#ffffff; border:1px solid #e0e8ed; border-radius:18px; }
+  .cv-intro-icon { width:65px; height:65px; min-width:65px; display:grid; place-items:center; background:#e6f5ef; border:1px solid #cbe8dc; border-radius:17px; font-size:35px; }
+  .cv-intro-label { color:#137f71; font-size:11px; font-weight:750; letter-spacing:1.4px; text-transform:uppercase; margin-bottom:3px; }
+  .cv-intro h1 { color:#142338; font-size:29px; font-weight:780; letter-spacing:-.7px; line-height:1.2; margin:0 0 6px; padding:0; }
+  .cv-intro p { color:#64748b; font-size:14px; line-height:1.5; margin:0; }
+  .stButton > button[kind="primary"], .stButton > button[data-testid="stBaseButton-primary"] { background:#0f8275; color:#fff; border-radius:12px; border:0; }
+  .stButton > button[kind="primary"]:hover, .stButton > button[data-testid="stBaseButton-primary"]:hover { background:#0b6a60; color:#fff; border:0; }
+  [data-testid="stFileUploader"] { border-radius:12px; }
+  [data-testid="stFooter"] { display:none; }
+  @media (max-width:720px) {
+    .cv-intro { padding:16px; gap:12px; }
+    .cv-intro-icon { width:49px; min-width:49px; height:49px; border-radius:13px; font-size:28px; }
+    .cv-intro h1 { font-size:23px; }
+    .cv-intro p { font-size:12px; }
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -250,10 +264,16 @@ def process_video(input_path, task, seconds, conf, progress):
     return output,processed,compatible
 
 
-st.title("🏏 CrickVision")
-st.caption("AI Vision Studio · Capstone Research Demo")
-st.subheader("Analyze cricket images and videos")
-st.write("Upload cricket footage, choose a task, then inspect the annotated output. These are research predictions, not official umpiring decisions.")
+st.markdown("""
+<div class="cv-intro">
+  <span class="cv-intro-icon" aria-hidden="true">🏏</span>
+  <div>
+    <div class="cv-intro-label">Images · Videos · Tracking</div>
+    <h1>Analysis Workspace</h1>
+    <p>Select an analysis task and upload an image or MP4 to see model predictions.</p>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 left,right=st.columns(2, gap="large")
 with left:
     st.markdown("#### Input media")
