@@ -1,6 +1,6 @@
 """CrickVision capstone demo: image/video object detection and RTMPose-S.
 
-Requires your own checkpoints in backend/models and MMPose dependencies installed.
+Uses the original checkpoints; RTMPose-S website inference runs via ONNX Runtime.
 The training notebook's evaluation metrics are NOT inferred from uploaded media.
 """
 from __future__ import annotations
@@ -22,6 +22,7 @@ MODELS = BASE / "models"
 CONFIGS = BASE / "configs"
 OBJECT_WEIGHTS = MODELS / "ijepa_yolov12n.pt"
 RT_WEIGHTS = MODELS / "rtmpose_s.pth"
+RT_ONNX = MODELS / "crickvision_rtmpose_s_13kpt.onnx"
 PERSON_WEIGHTS = MODELS / "yolov8n.pt"
 RT_CONFIG = CONFIGS / "rtmpose_s_crickvision_v3.py"
 RT_META = CONFIGS / "crickvision_pose13.py"
@@ -76,32 +77,18 @@ def get_person_model():
     return YOLO(str(PERSON_WEIGHTS))
 
 
-@st.cache_resource(show_spinner="Loading RTMPose-S...")
+@st.cache_resource(show_spinner="Loading RTMPose-S (ONNX Runtime)...")
 def get_pose_model():
-    require([RT_WEIGHTS, RT_CONFIG, RT_META])
-    # The exported training config references Kaggle-only metainfo paths.
-    # Patch these without changing the trained architecture or keypoint order.
-    from mmengine.config import Config
-    from mmpose.utils import register_all_modules
-    from mmdet.utils import register_all_modules as register_mmdet_modules
-    from mmpose.apis import init_model
-    import torch
-
-    register_mmdet_modules(init_default_scope=False)
-    register_all_modules(init_default_scope=True)
-    cfg = Config.fromfile(str(RT_CONFIG))
-    for key in ("train_dataloader", "val_dataloader", "test_dataloader"):
-        if key in cfg:
-            cfg[key].dataset.metainfo = dict(from_file=str(RT_META))
-    cfg.load_from = None
-    cfg.resume = False
-    cfg.work_dir = str(BASE / ".inference_workdir")
-    # init_model accepts a Config instance (no need to create a new config file).
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    model = init_model(cfg, str(RT_WEIGHTS), device=device)
-    if model.cfg.model.head.out_channels != 13:
-        raise RuntimeError("RTMPose checkpoint/config must produce exactly 13 keypoints.")
-    return model
+    """Load same trained RTMPose-S model, exported to ONNX for website inference."""
+    require([RT_ONNX])
+    import onnxruntime as ort
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = 2
+    opts.inter_op_num_threads = 1
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    return ort.InferenceSession(
+        str(RT_ONNX), sess_options=opts, providers=["CPUExecutionProvider"]
+    )
 
 
 def people_boxes(img_bgr, confidence=0.12):
@@ -114,24 +101,66 @@ def people_boxes(img_bgr, confidence=0.12):
 
 
 def get_poses(img_bgr, boxes):
+    """Custom RTMPose-S ONNX inference with MMPose-matched preprocessing.
+
+    The original config: 192x256 input, RGB normalization, bbox padding 1.25,
+    13 keypoints, SimCC ratio 2, horizontal flip-test enabled.
+    YOLOv8n supplies the same person boxes. Video tracking code is unchanged.
+    """
     if len(boxes) == 0:
         return []
-    from mmpose.apis import inference_topdown
-    pose_samples = inference_topdown(get_pose_model(), img_bgr, boxes, bbox_format="xyxy")
-    if len(pose_samples) != len(boxes):
-        raise RuntimeError("Pose/bounding-box prediction count mismatch")
+
+    session = get_pose_model()
+    input_name = session.get_inputs()[0].name
+    mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
+    std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+    w, h = 192.0, 256.0
+    # Pair indices from the user's crickvision_pose13.py metadata.
+    flip_indices = [0, 2, 1, 4, 3, 7, 8, 5, 6, 11, 12, 9, 10]
     extracted = []
-    for sample in pose_samples:
-        inst = sample.pred_instances
-        pts = np.asarray(inst.keypoints, np.float32)
-        scores = np.asarray(inst.keypoint_scores, np.float32)
-        if pts.ndim == 3:
-            pts = pts[0]
-        if scores.ndim == 2:
-            scores = scores[0]
-        if pts.shape != (13, 2) or scores.shape != (13,):
-            raise RuntimeError(f"Unexpected RTMPose output shape: {pts.shape}, {scores.shape}")
-        extracted.append((pts, scores))
+
+    for box in boxes:
+        x1, y1, x2, y2 = (float(v) for v in box)
+        center = np.array([(x1 + x2)*.5, (y1 + y2)*.5], dtype=np.float32)
+        scale = np.maximum(np.array([x2 - x1, y2 - y1], dtype=np.float32), 1.0) * 1.25
+        aspect = w / h
+        if scale[0] > scale[1] * aspect:
+            scale[1] = scale[0] / aspect
+        else:
+            scale[0] = scale[1] * aspect
+
+        # Equivalent to MMPose TopdownAffine -> get_warp_matrix at 0 degrees.
+        warp_mat = np.array([
+            [w/scale[0], 0.0, w*(0.5-center[0]/scale[0])],
+            [0.0, h/scale[1], h*(0.5-center[1]/scale[1])],
+        ], dtype=np.float32)
+        crop = cv2.warpAffine(img_bgr, warp_mat, (192,256), flags=cv2.INTER_LINEAR)
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32)
+        inp = np.ascontiguousarray(((rgb - mean) / std).transpose(2,0,1)[None], dtype=np.float32)
+
+        sx, sy = session.run(None, {input_name: inp})
+        if sx.shape != (1,13,384) or sy.shape != (1,13,512):
+            raise RuntimeError(f"Unexpected ONNX SimCC output shapes: {sx.shape} and {sy.shape}")
+
+        # Original model has test_cfg.flip_test=True. Mirror that at inference:
+        # flip input, swap left/right keypoint indices, mirror x-axis logits,
+        # then average predictions prior to SimCC decoding.
+        inp_flip = np.ascontiguousarray(inp[:,:,:,::-1])
+        sx_flip, sy_flip = session.run(None, {input_name: inp_flip})
+        sx = (sx + sx_flip[:,flip_indices,::-1]) * 0.5
+        sy = (sy + sy_flip[:,flip_indices,:]) * 0.5
+
+        xloc = np.argmax(sx[0], axis=-1)
+        yloc = np.argmax(sy[0], axis=-1)
+        xval = sx[0].max(axis=-1)
+        yval = sy[0].max(axis=-1)
+        scores = np.minimum(xval, yval).astype(np.float32)
+        pts = np.stack([xloc,yloc], axis=-1).astype(np.float32) / 2.0
+        pts[:,0] = (pts[:,0] - w/2) * scale[0]/w + center[0]
+        pts[:,1] = (pts[:,1] - h/2) * scale[1]/h + center[1]
+        pts[scores <= 0.0] = -1.0
+        extracted.append((pts,scores))
+
     return extracted
 
 
@@ -323,4 +352,4 @@ if run and upload:
                 st.download_button("Download annotated MP4",output.read_bytes(),file_name="crickvision_result.mp4",mime="video/mp4")
     except Exception as exc:
         st.error(f"Inference could not run: {exc}")
-        st.caption("Verify the checkpoint paths, RTMPose package versions, and available CPU/GPU memory. See README.md.")
+        st.caption("Verify the checkpoint paths, RTMPose package versions, and available CPU/GPU memory. See deployment logs.")

@@ -6,3 +6,6 @@ opencv-python-headless>=4.8
 numpy>=1.24,<2
 Pillow
 PyYAML
+
+# Exported RTMPose-S website inference (no MMPose/MMCV cloud dependency)
+onnxruntime>=1.18,<2
