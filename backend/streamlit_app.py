@@ -5,7 +5,7 @@ The training notebook's evaluation metrics are NOT inferred from uploaded media.
 """
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from pathlib import Path
 import shutil
 import subprocess
@@ -167,7 +167,7 @@ def get_poses(img_bgr, boxes):
 def draw_poses(image, boxes, poses, ids=None, scores=None, min_conf=0.25):
     out = image.copy()
     for i, (box, (pts, kp_scores)) in enumerate(zip(boxes, poses)):
-        color = (166, 82, 20)  # dark blue, OpenCV BGR; RGB #1452A6
+        color = (198, 120, 54)  # lighter dark blue, OpenCV BGR; RGB #3678C6
         x1,y1,x2,y2 = np.round(box).astype(int)
         cv2.rectangle(out,(x1,y1),(x2,y2),color,1,cv2.LINE_AA)
         tag = f"Player #{ids[i]}" if ids is not None else f"Player {i+1}"
@@ -183,15 +183,23 @@ def draw_poses(image, boxes, poses, ids=None, scores=None, min_conf=0.25):
 
 
 def detect_image(img_bgr, conf):
+    # Same YOLO inference. Only collect per-class counts from its actual boxes.
     result = get_object_model().predict(img_bgr, conf=conf, imgsz=640, verbose=False)[0]
     count = len(result.boxes) if result.boxes is not None else 0
-    return result.plot(), count
+    classes = Counter()
+    if count:
+        for class_id in result.boxes.cls.int().cpu().tolist():
+            classes[str(result.names[int(class_id)])] += 1
+    return result.plot(), count, sorted(classes.items(), key=lambda item: (-item[1], item[0]))
 
 
 def pose_image(img_bgr):
+    # Count exactly the keypoints that draw_poses() displays at confidence >= 0.25.
     boxes, scores = people_boxes(img_bgr)
     poses = get_poses(img_bgr, boxes)
-    return draw_poses(img_bgr, boxes, poses, scores=scores), len(poses)
+    displayed = sum(int(np.count_nonzero(kp_scores >= 0.25)) for _, kp_scores in poses)
+    possible = len(poses) * 13
+    return draw_poses(img_bgr, boxes, poses, scores=scores), len(poses), displayed, possible
 
 
 def resize_frame(frame, max_width=1280):
@@ -258,6 +266,8 @@ def process_video(input_path, task, seconds, conf, progress):
         get_pose_model()
         history = defaultdict(lambda:deque(maxlen=25))
 
+    seen_track_ids = set()  # Tracker-generated IDs, not ground-truth identities.
+    seen_classes = set()
     processed=0
     try:
         while processed < total:
@@ -271,6 +281,11 @@ def process_video(input_path, task, seconds, conf, progress):
                                          conf=min(conf,0.05), iou=0.50, imgsz=640,
                                          classes=moving, verbose=False)[0]
                 canvas = results.plot()
+                if results.boxes is not None:
+                    for class_id in results.boxes.cls.int().cpu().tolist():
+                        seen_classes.add(str(names[int(class_id)]))
+                    if results.boxes.id is not None:
+                        seen_track_ids.update(int(t) for t in results.boxes.id.int().cpu().tolist())
                 if results.boxes is not None and results.boxes.id is not None:
                     for box,tid in zip(results.boxes.xyxy.cpu().numpy(), results.boxes.id.int().cpu().tolist()):
                         x1,y1,x2,y2 = box
@@ -283,6 +298,7 @@ def process_video(input_path, task, seconds, conf, progress):
                     static_result = detector.predict(frame,classes=static,conf=conf,imgsz=640,verbose=False)[0]
                     if static_result.boxes is not None:
                         for box, cls in zip(static_result.boxes.xyxy.cpu().numpy(), static_result.boxes.cls.int().cpu().tolist()):
+                            seen_classes.add(str(names[cls]))
                             x1,y1,x2,y2 = np.rint(box).astype(int)
                             cv2.rectangle(canvas,(x1,y1),(x2,y2),(135,90,255),2)
                             cv2.putText(canvas,str(names[cls]),(x1,max(y1-5,15)),cv2.FONT_HERSHEY_SIMPLEX,0.5,(135,90,255),2)
@@ -293,6 +309,8 @@ def process_video(input_path, task, seconds, conf, progress):
                 tracked_boxes=np.asarray(tracked.xyxy,dtype=np.float32).reshape(-1,4)
                 poses=get_poses(frame,tracked_boxes)
                 ids=[int(t) for t in tracked.tracker_id] if tracked.tracker_id is not None else list(range(len(tracked_boxes)))
+                if tracked.tracker_id is not None:
+                    seen_track_ids.update(ids)
                 canvas=draw_poses(frame,tracked_boxes,poses,ids=ids,scores=tracked.confidence)
                 for box,tid in zip(tracked_boxes,ids):
                     pt = tuple(np.rint([(box[0]+box[2])/2,(box[1]+box[3])/2]).astype(int))
@@ -307,7 +325,8 @@ def process_video(input_path, task, seconds, conf, progress):
         capture.release();writer.release()
     if processed==0: raise RuntimeError("No video frames were processed")
     output,compatible=transcode_h264(raw)
-    return output,processed,compatible
+    statistics = {"tracked_ids": len(seen_track_ids), "object_classes": sorted(seen_classes)}
+    return output,processed,compatible,statistics
 
 
 st.markdown("""
@@ -342,31 +361,70 @@ if run and upload:
             data=np.frombuffer(upload.getvalue(),dtype=np.uint8)
             orig=cv2.imdecode(data,cv2.IMREAD_COLOR)
             if orig is None:raise ValueError("Not a readable image")
+            object_task = task == "Cricket object detection"
             with st.spinner("Running inference..."):
-                out,count=(detect_image(orig,conf) if task=="Cricket object detection" else pose_image(orig))
-            st.markdown("### Analysis results")
+                if object_task:
+                    out, count, class_counts = detect_image(orig, conf)
+                else:
+                    out, count, displayed, possible = pose_image(orig)
+            elapsed = time.perf_counter() - started
+            st.markdown("### Object Detection Results" if object_task else "### Pose Estimation Results")
             a,b=st.columns(2)
             a.image(cv2.cvtColor(orig,cv2.COLOR_BGR2RGB),caption="Original image",use_container_width=True)
             b.image(cv2.cvtColor(out,cv2.COLOR_BGR2RGB),caption="Annotated output",use_container_width=True)
             c1,c2,c3=st.columns(3)
-            c1.metric("Detections / players",count)
-            c2.metric("Processing time",f"{time.perf_counter()-started:.2f}s")
-            c3.metric("Model", "I-JEPA + YOLOv12n" if task=="Cricket object detection" else "RTMPose-S")
+            if object_task:
+                c1.metric("Objects detected", count)
+                c2.metric("Class types", len(class_counts))
+            else:
+                c1.metric("Players detected", count)
+                c2.metric("Keypoints displayed", f"{displayed}/{possible}")
+            c3.metric("Processing time", f"{elapsed:.2f}s")
             ok,encoded=cv2.imencode('.png',out)
             if ok:st.download_button("Download annotated image",encoded.tobytes(),file_name="crickvision_result.png",mime="image/png")
+            # result-layout-fix-v1: keep supplementary information after output/download
+            if object_task:
+                st.markdown("**Detected classes**")
+                if class_counts:
+                    for start in range(0, len(class_counts), 4):
+                        columns = st.columns(4)
+                        for column, (label, number) in zip(columns, class_counts[start:start+4]):
+                            with column.container(border=True):
+                                st.write(f"{label}: {number}")
+                else:
+                    st.caption("No object classes detected at the selected confidence threshold.")
+            st.caption("Model: I-JEPA + YOLOv12n" if object_task else "Model: RTMPose-S")
         else:
             with tempfile.TemporaryDirectory(prefix="crickvision_") as temp:
                 source=Path(temp)/"input.mp4"
                 source.write_bytes(upload.getvalue())
                 progress=st.progress(0,text="Preparing video...")
                 with st.spinner("Processing video..."):
-                    output,frames,h264=process_video(source,task,max_sec,conf,progress)
+                    output,frames,h264,stats=process_video(source,task,max_sec,conf,progress)
                 progress.empty()
-                st.success(f"Processed {frames} frames in {time.perf_counter()-started:.1f} seconds")
+                elapsed = time.perf_counter() - started
+                object_task = task == "Cricket object detection"
+                st.markdown("### Object Tracking Results" if object_task else "### Pose Tracking Results")
                 final_video_bytes = output.read_bytes()
                 st.video(final_video_bytes, format="video/mp4")
+                # cv-clean-results-v3: video first, then metrics and download.
+                c1,c2,c3 = st.columns(3)
+                c1.metric("Frames processed", frames)
+                c2.metric("Unique tracked IDs" if object_task else "Tracked player IDs", stats["tracked_ids"])
+                c3.metric("Processing time", f"{elapsed:.2f}s")
                 st.download_button("Download annotated MP4", final_video_bytes,
                                    file_name="crickvision_result.mp4", mime="video/mp4")
+                if object_task:
+                    st.markdown("**Detected object classes**")
+                    if stats["object_classes"]:
+                        for start in range(0, len(stats["object_classes"]), 4):
+                            columns = st.columns(4)
+                            for column, label in zip(columns, stats["object_classes"][start:start+4]):
+                                with column.container(border=True):
+                                    st.write(label)
+                    else:
+                        st.caption("No detections in the processed frames.")
+                st.caption("Model: I-JEPA + YOLOv12n" if object_task else "Model: RTMPose-S")
     except Exception as exc:
         st.error(f"Inference could not run: {exc}")
         st.caption("Verify the checkpoint paths, RTMPose package versions, and available CPU/GPU memory. See deployment logs.")
