@@ -167,18 +167,18 @@ def get_poses(img_bgr, boxes):
 def draw_poses(image, boxes, poses, ids=None, scores=None, min_conf=0.25):
     out = image.copy()
     for i, (box, (pts, kp_scores)) in enumerate(zip(boxes, poses)):
-        color = (56, 177, 52) if ids is None else ((43*i+80)%220+30, (97*i+50)%220+30, (139*i+90)%220+30)
+        color = (166, 82, 20)  # dark blue, OpenCV BGR; RGB #1452A6
         x1,y1,x2,y2 = np.round(box).astype(int)
-        cv2.rectangle(out,(x1,y1),(x2,y2),color,2)
+        cv2.rectangle(out,(x1,y1),(x2,y2),color,1,cv2.LINE_AA)
         tag = f"Player #{ids[i]}" if ids is not None else f"Player {i+1}"
         if scores is not None: tag += f" ({scores[i]:.2f})"
-        cv2.putText(out,tag,(max(0,x1),max(18,y1-6)),cv2.FONT_HERSHEY_SIMPLEX,.5,color,2)
+        cv2.putText(out,tag,(max(0,x1),max(18,y1-6)),cv2.FONT_HERSHEY_SIMPLEX,.4,color,1,cv2.LINE_AA)
         for a,b in EDGES:
             if kp_scores[a]>=min_conf and kp_scores[b]>=min_conf:
-                cv2.line(out,tuple(np.rint(pts[a]).astype(int)),tuple(np.rint(pts[b]).astype(int)),color,2,cv2.LINE_AA)
+                cv2.line(out,tuple(np.rint(pts[a]).astype(int)),tuple(np.rint(pts[b]).astype(int)),color,1,cv2.LINE_AA)
         for p,score in zip(pts,kp_scores):
             if score>=min_conf:
-                cv2.circle(out,tuple(np.rint(p).astype(int)),3,color,-1,cv2.LINE_AA)
+                cv2.circle(out,tuple(np.rint(p).astype(int)),2,color,-1,cv2.LINE_AA)
     return out
 
 
