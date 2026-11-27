@@ -175,7 +175,7 @@ def draw_poses(image, boxes, poses, ids=None, scores=None, min_conf=0.25):
         cv2.putText(out,tag,(max(0,x1),max(18,y1-6)),cv2.FONT_HERSHEY_SIMPLEX,.4,color,1,cv2.LINE_AA)
         for a,b in EDGES:
             if kp_scores[a]>=min_conf and kp_scores[b]>=min_conf:
-                cv2.line(out,tuple(np.rint(pts[a]).astype(int)),tuple(np.rint(pts[b]).astype(int)),color,1,cv2.LINE_AA)
+                cv2.line(out,tuple(np.rint(pts[a]).astype(int)),tuple(np.rint(pts[b]).astype(int)),color,2,cv2.LINE_AA)
         for p,score in zip(pts,kp_scores):
             if score>=min_conf:
                 cv2.circle(out,tuple(np.rint(p).astype(int)),2,color,-1,cv2.LINE_AA)
